@@ -1,4 +1,4 @@
-name: Test Build Canary with openssl1
+name: Quan
 on:
   workflow_dispatch:
   push:
