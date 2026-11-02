@@ -1,0 +1,385 @@
+name: Test Build Canary with openssl1
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - canary
+      
+jobs:
+  get-version:
+    name: get latest version number
+    runs-on: ubuntu-latest
+    outputs:
+      CUR_VERSION: ${{steps.get-version.outputs.CUR_VERSION}}
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        ref: VERSION_CONTROL
+        fetch-depth: 1
+        path: version_control
+    - name: get version
+      id: get-version
+      run: |
+          #获取当前版本号
+          pre_version=$(cat version_control/VERSION | grep "PREFEX" | sed 's/PREFEX=\(.*\)/\1/')
+          cur_version=$(cat version_control/VERSION | grep "CUR_VERS" | sed 's/CUR_VERS=\(.*\)/\1/')
+          echo "CUR_VERSION=$pre_version$cur_version" >> $GITHUB_OUTPUT
+  build: 
+    needs: get-version
+    strategy:
+      matrix:
+        goarch: [x86_64, powerpc64le, mipsel, mips, i686, aarch64, armv7l, mips-sf, mipsel-sf]
+      fail-fast: false
+    runs-on: ubuntu-latest
+    env:
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+        with:
+          ref: BUILD-DEPENDENCIES
+          fetch-depth: 1
+          path: dependencies
+
+      - name: build-nextjs
+        run: |
+          cd ${{ github.workspace }}
+          git clone https://github.com/PikuZheng/smartdns-webui.git
+          docker run -i --rm -v ${{ github.workspace }}:/workdir node:lts-alpine sh -c "cd /workdir/smartdns-webui && npm install && NODE_ENV=production npm run build --no-analytics"
+
+      - name: build-smartdns-openssl1.1.1
+        run: |
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          cd ${{ github.workspace }}
+          mkdir -p ${{ github.workspace }}/build
+          sed -i "s/VER=.*/VER=${{needs.get-version.outputs.CUR_VERSION}}/" ${{ github.workspace }}/package/build-pkg.sh
+          mkdir -p ${{ github.workspace }}/openssl
+          tar -zxvf ./dependencies/openssl-1.1.1w.tar.gz --strip-components 1 -C openssl
+          rm docker-openssl.sh || true
+          cat >> docker-openssl.sh << EOF
+          apk add perl make coreutils tar pkgconfig dpkg binutils autoconf zig
+          mkdir -p /usr/local/zig/bin
+          if [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi  "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "i686" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          else
+            printf '#!/bin/sh\nexec zig cc -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          fi
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/cc
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/clang
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/c++
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/clang++
+          printf '#!/bin/sh\nexec zig ar "\044@"\n' > /usr/local/zig/bin/ar
+          chmod +x /usr/local/zig/bin/*
+          export PATH=/usr/local/zig/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          export CC=gcc
+          cd /workdir/openssl
+          if [ "$GOARCH" == "mipsel" ] || [ "$GOARCH" == "mips" ] || [ "$GOARCH" == "mips-sf" ] || [ "$GOARCH" == "mipsel-sf" ] ;then
+            ./Configure no-tests linux-mips32
+          elif [ "$GOARCH" == "mips64el" ] || [ "$GOARCH" == "mips64" ] ;then
+            ./Configure no-tests linux-mips64
+          elif [ "$GOARCH" == "i686" ] ;then
+            ./Configure no-tests linux-x86
+          elif [ "$GOARCH" == "powerpc64le" ] ;then
+            ./Configure no-tests linux-ppc64le
+          elif [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            ./Configure no-tests linux-armv4
+          else
+            ./Configure no-tests linux-$GOARCH
+          fi
+          make clean && make all
+          cd /workdir
+          sed -i 's/^HAS_UNWIND.*/HAS_UNWIND := 0/' /workdir/src/Makefile
+          export CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -I/workdir/openssl/include -Wno-error=date-time"
+          export LDFLAGS="-L /workdir/openssl -Wl,-z,nocopyreloc"
+          ./package/build-pkg.sh --platform openwrt --arch all --filearch $GOARCH-openwrt-openssl1.1.1 --outputdir /workdir/build
+          ./package/build-pkg.sh --platform optware --arch all --filearch $GOARCH-optware-openssl1.1.1 --outputdir /workdir/build
+          EOF
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh /workdir/docker-openssl.sh
+
+      - name: build-smartdns-openssl1.1.1-edns
+        run: |
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          cd ${{ github.workspace }}
+          rm docker-openssl.sh || true
+          cat >> docker-openssl.sh << EOF
+          apk add perl make coreutils tar pkgconfig dpkg binutils autoconf zig
+          mkdir -p /usr/local/zig/bin
+          if [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi  "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "i686" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          else
+            printf '#!/bin/sh\nexec zig cc -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          fi
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/cc
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/clang
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/c++
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/clang++
+          printf '#!/bin/sh\nexec zig ar "\044@"\n' > /usr/local/zig/bin/ar
+          chmod +x /usr/local/zig/bin/*
+          export PATH=/usr/local/zig/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          export CC=gcc
+          cd /workdir/openssl
+          if [ "$GOARCH" == "mipsel" ] || [ "$GOARCH" == "mips" ] || [ "$GOARCH" == "mips-sf" ] || [ "$GOARCH" == "mipsel-sf" ] ;then
+            ./Configure no-tests linux-mips32
+          elif [ "$GOARCH" == "mips64el" ] || [ "$GOARCH" == "mips64" ] ;then
+            ./Configure no-tests linux-mips64
+          elif [ "$GOARCH" == "i686" ] ;then
+            ./Configure no-tests linux-x86
+          elif [ "$GOARCH" == "powerpc64le" ] ;then
+            ./Configure no-tests linux-ppc64le
+          elif [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            ./Configure no-tests linux-armv4
+          else
+            ./Configure no-tests linux-$GOARCH
+          fi
+          make clean && make all
+          cd /workdir
+          sed -i 's/^HAS_UNWIND.*/HAS_UNWIND := 0/' /workdir/src/Makefile
+          export CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -I/workdir/openssl/include -Wno-error=date-time -DFEATURE_CHECK_EDNS"
+          export LDFLAGS="-L /workdir/openssl -Wl,-z,nocopyreloc"
+          ./package/build-pkg.sh --platform openwrt --arch all --filearch $GOARCH-openwrt-openssl1.1.1-edns --outputdir /workdir/build
+          ./package/build-pkg.sh --platform optware --arch all --filearch $GOARCH-optware-openssl1.1.1-edns --outputdir /workdir/build
+          EOF
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh /workdir/docker-openssl.sh
+
+      - name: build-ui
+        run: |
+          cd ${{ github.workspace }}
+          if [[ "$GOARCH" != "x86_64" && "$GOARCH" != "aarch64" && "$GOARCH" != "armv7l" ]];then
+            echo "架构 $GOARCH 不支持rust‑musl‑cross，跳过smartdns‑ui编译"
+            exit 0
+          fi
+          rm docker-build.sh || true
+          cat >> docker-build.sh << EOF
+          cd /workdir/plugin/smartdns-ui
+          export RUSTFLAGS='-C link-arg=-Wl,-rpath,./ -C target-feature=-crt-static'
+          TARGET=""
+          IMAGE_TARGET=""
+          if test "$GOARCH" = "armv7l" ;then
+            cargo add aws-lc-sys --features bindgen
+            TARGET=armv7-unknown-linux-musleabihf
+            IMAGE_TARGET=armv7-musleabihf
+          elif test "$GOARCH" = "aarch64" ;then
+            TARGET=aarch64-unknown-linux-musl
+            IMAGE_TARGET=aarch64-musl
+          elif test "$GOARCH" = "x86_64" ;then
+            TARGET=x86_64-unknown-linux-musl
+            IMAGE_TARGET=x86_64-musl
+          fi
+          cargo build --release --target=\$TARGET
+          cp ./target/\$TARGET/release/libsmartdns_ui.so ./
+          cp /usr/local/musl/\$TARGET/lib/libgcc_s.so.1 ./
+          cp /usr/local/musl/\$TARGET/lib/libstdc++.so.6 ./
+          EOF
+          DOCKER_IMAGE=""
+          if test "$GOARCH" = "armv7l" ;then
+            DOCKER_IMAGE=messense/rust-musl-cross:armv7-musleabihf
+          elif test "$GOARCH" = "aarch64" ;then
+            DOCKER_IMAGE=messense/rust-musl-cross:aarch64-musl
+          elif test "$GOARCH" = "x86_64" ;then
+            DOCKER_IMAGE=messense/rust-musl-cross:x86_64-musl
+          fi
+          docker run -i --rm -v ${{ github.workspace }}:/workdir \${DOCKER_IMAGE} sh /workdir/docker-build.sh
+
+      - name: release ui ipk openssl1.1.1
+        run: |
+          if [ ! -f ${{ github.workspace }}/plugin/smartdns-ui/libsmartdns_ui.so ];then
+            echo "libsmartdns_ui.so不存在，跳过ui包打包"
+            exit 0
+          fi
+          cd ${{ github.workspace }}/package/openwrt
+          chmod +x make_openwrt_withui.sh
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh -c "apk update && apk add tar && /workdir/package/openwrt/make_openwrt_withui.sh -o /workdir/build --arch all --filearch $GOARCH-openwrt-openssl1.1.1-ui --ver ${{needs.get-version.outputs.CUR_VERSION}}"
+
+      - name: release ui ipk openssl1.1.1-edns
+        run: |
+          if [ ! -f ${{ github.workspace }}/plugin/smartdns-ui/libsmartdns_ui.so ];then
+            echo "libsmartdns_ui.so不存在，跳过ui‑edns包打包"
+            exit 0
+          fi
+          cd ${{ github.workspace }}/package/openwrt
+          chmod +x make_openwrt_withui.sh
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh -c "apk update && apk add tar && /workdir/package/openwrt/make_openwrt_withui.sh -o /workdir/build --arch all --filearch $GOARCH-openwrt-openssl1.1.1-edns-ui --ver ${{needs.get-version.outputs.CUR_VERSION}}"
+
+      - name: build-smartdns-openssl1.0.2
+        run: |
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          cd ${{ github.workspace }}
+          mkdir -p ${{ github.workspace }}/build
+          rm -rf ${{ github.workspace }}/openssl
+          mkdir -p ${{ github.workspace }}/openssl
+          tar -zxvf ./dependencies/openssl-1.0.2u.tar.gz --strip-components 1 -C openssl
+          rm docker-openssl.sh || true
+          cat >> docker-openssl.sh << EOF
+          apk add perl make coreutils tar pkgconfig dpkg binutils autoconf zig
+          mkdir -p /usr/local/zig/bin
+          if [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi  "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "i686" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          else
+            printf '#!/bin/sh\nexec zig cc -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          fi
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/cc
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/clang
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/c++
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/clang++
+          printf '#!/bin/sh\nexec zig ar "\044@"\n' > /usr/local/zig/bin/ar
+          chmod +x /usr/local/zig/bin/*
+          export PATH=/usr/local/zig/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          export CC=gcc
+          cd /workdir/openssl
+          if [ "$GOARCH" == "mipsel" ] || [ "$GOARCH" == "mips" ] || [ "$GOARCH" == "mips-sf" ] || [ "$GOARCH" == "mipsel-sf" ] ;then
+            ./Configure linux-mips32 no-asm shared
+          elif [ "$GOARCH" == "mips64el" ] || [ "$GOARCH" == "mips64" ] ;then
+            ./Configure linux-mips64
+          elif [ "$GOARCH" == "i686" ] ;then
+            ./Configure linux-elf
+          elif [ "$GOARCH" == "powerpc64le" ] ;then
+            ./Configure linux-ppc64le
+          elif [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            ./Configure linux-armv4 no-asm shared
+          else
+            ./Configure linux-$GOARCH
+          fi
+          make clean && make all
+          cd /workdir
+          sed -i 's/^HAS_UNWIND.*/HAS_UNWIND := 0/' /workdir/src/Makefile
+          export CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -I/workdir/openssl/include -Wno-error=date-time"
+          export LDFLAGS="-L /workdir/openssl -Wl,-z,nocopyreloc"
+          ./package/build-pkg.sh --platform openwrt --arch all --filearch $GOARCH-openwrt-openssl1.0.2 --outputdir /workdir/build
+          ./package/build-pkg.sh --platform optware --arch all --filearch $GOARCH-optware-openssl1.0.2 --outputdir /workdir/build
+          EOF
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh /workdir/docker-openssl.sh
+
+      - name: build-smartdns-openssl1.0.2-edns
+        run: |
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          cd ${{ github.workspace }}
+          rm docker-openssl.sh || true
+          cat >> docker-openssl.sh << EOF
+          apk add perl make coreutils tar pkgconfig dpkg binutils autoconf zig
+          mkdir -p /usr/local/zig/bin
+          if [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target arm-linux-musleabihf "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi  "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mips-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mips-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "mipsel-sf" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target mipsel-linux-musleabi -msoft-float "\044@"\n' > /usr/local/zig/bin/g++
+          elif [ "$GOARCH" == "i686" ] ;then
+            printf '#!/bin/sh\nexec zig cc -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target x86-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          else
+            printf '#!/bin/sh\nexec zig cc -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/gcc
+            printf '#!/bin/sh\nexec zig c++ -target $GOARCH-linux-musl "\044@"\n' > /usr/local/zig/bin/g++
+          fi
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/cc
+          cp /usr/local/zig/bin/gcc /usr/local/zig/bin/clang
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/c++
+          cp /usr/local/zig/bin/g++ /usr/local/zig/bin/clang++
+          printf '#!/bin/sh\nexec zig ar "\044@"\n' > /usr/local/zig/bin/ar
+          chmod +x /usr/local/zig/bin/*
+          export PATH=/usr/local/zig/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          export CC=gcc
+          cd /workdir/openssl
+          if [ "$GOARCH" == "mipsel" ] || [ "$GOARCH" == "mips" ] || [ "$GOARCH" == "mips-sf" ] || [ "$GOARCH" == "mipsel-sf" ] ;then
+            ./Configure linux-mips32 no-asm shared
+          elif [ "$GOARCH" == "mips64el" ] || [ "$GOARCH" == "mips64" ] ;then
+            ./Configure linux-mips64
+          elif [ "$GOARCH" == "i686" ] ;then
+            ./Configure linux-elf
+          elif [ "$GOARCH" == "powerpc64le" ] ;then
+            ./Configure linux-ppc64le
+          elif [ "$GOARCH" == "armv7" ] || [ "$GOARCH" == "armv7l" ] ;then
+            ./Configure linux-armv4 no-asm shared
+          else
+            ./Configure linux-$GOARCH
+          fi
+          make clean && make all
+          cd /workdir
+          sed -i 's/^HAS_UNWIND.*/HAS_UNWIND := 0/' /workdir/src/Makefile
+          export CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-unwind-tables -fno-asynchronous-unwind-tables -I/workdir/openssl/include -Wno-error=date-time -DFEATURE_CHECK_EDNS"
+          export LDFLAGS="-L /workdir/openssl -Wl,-z,nocopyreloc"
+          ./package/build-pkg.sh --platform openwrt --arch all --filearch $GOARCH-openwrt-openssl1.0.2-edns --outputdir /workdir/build
+          ./package/build-pkg.sh --platform optware --arch all --filearch $GOARCH-optware-openssl1.0.2-edns --outputdir /workdir/build
+          EOF
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh /workdir/docker-openssl.sh
+
+      - name: general tag and release ipk
+        id: tag
+        run: |
+          cd ${{ github.workspace }}
+          echo "release_tag=${{needs.get-version.outputs.CUR_VERSION}}-openssl1-canary" >> $GITHUB_OUTPUT
+          touch release.txt
+          echo "包含一些上游未合并的更新" >> release.txt
+          echo ${{ github.sha }} >> release.txt
+          echo "status=success" >> $GITHUB_OUTPUT
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v1
+        if: steps.tag.outputs.status == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          files: |
+            ${{ github.workspace }}/build/*
+      - name: debug list build files
+        run: ls -la ${{ github.workspace }}/build
