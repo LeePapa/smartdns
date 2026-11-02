@@ -29,7 +29,7 @@ jobs:
     needs: get-version
     strategy:
       matrix:
-        goarch: [x86_64, aarch64, armv7]
+        goarch: [x86_64]
         # bindgen 似乎不支持armv7和powerpc64le
       fail-fast: false
     runs-on: ubuntu-latest
@@ -238,9 +238,26 @@ jobs:
           else
             docker run -i --rm -v ${{ github.workspace }}:/workdir muslcc/x86_64:$GOARCH-linux-musl sh /workdir/docker-openssl.sh
           fi
+          # =========新增开始：备份edns apk，防止后面make_openwrt_withui.sh覆盖删除=========
+          cd ${{ github.workspace }}/build
+          # 将生成的 *-edns.apk 备份，build‑pkg.sh输出的apk名字类似 smartdns.xxx.x86_64‑edns.apk
+          for apkfile in *-${GOARCH}-edns.apk; do
+            if [ -f "$apkfile" ]; then
+              cp "$apkfile" "${apkfile}.bak"
+            fi
+          done
+          # =========新增结束=========
           cd ${{ github.workspace }}/package/openwrt
           chmod +x make_openwrt_withui.sh
           ./make_openwrt_withui.sh -o ${{ github.workspace }}/build --arch all --filearch $GOARCH-edns --ver ${{needs.get-version.outputs.CUR_VERSION}}
+          # =========新增开始：恢复备份的edns apk回build目录=========
+          cd ${{ github.workspace }}/build
+          for bakapk in *.apk.bak; do
+            if [ -f "$bakapk" ]; then
+              mv "$bakapk" "${bakapk%.bak}"
+            fi
+          done
+          # =========新增结束=========
       - name: release deb with edns
         run: |
           cd ${{ github.workspace }}/package/debian
