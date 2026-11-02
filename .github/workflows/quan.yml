@@ -212,7 +212,8 @@ jobs:
           elif test "$GOARCH" = "x86_64" ;then
             DOCKER_IMAGE=messense/rust-musl-cross:x86_64-musl
           fi
-          docker run -i --rm -v ${{ github.workspace }}:/workdir \${DOCKER_IMAGE} sh /workdir/docker-build.sh
+          # ✅重点：移除反斜杠！直接 $DOCKER_IMAGE
+          docker run -i --rm -v ${{ github.workspace }}:/workdir "$DOCKER_IMAGE" sh /workdir/docker-build.sh
 
       - name: release ui ipk openssl1.1.1
         run: |
