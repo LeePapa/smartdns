@@ -180,6 +180,15 @@ jobs:
           cd ${{ github.workspace }}/package/openwrt
           chmod +x make_openwrt_withui.sh
           docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh -c "apk update && apk add tar && /workdir/package/openwrt/make_openwrt_withui.sh -o /workdir/build --arch all --filearch $GOARCH --ver ${{needs.get-version.outputs.CUR_VERSION}}"
+      - name: Upload regular openwrt/alpine packages to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartdns-regular-openwrt-${{ matrix.goarch }}
+          path: |
+            ${{ github.workspace }}/build/smartdns_with_ui.*.ipk
+            ${{ github.workspace }}/build/smartdns_with_ui.*.apk
+            ${{ github.workspace }}/build/smartdns_with_ui.*.tar.gz
+          if-no-files-found: warn
       - name: release deb
         run: |
           cd ${{ github.workspace }}/package/debian
@@ -207,6 +216,12 @@ jobs:
           sed -i '/^Depends:/ {s/$/, musl/;b}; /^Package:/a Depends: musl' ./DEBIAN/control
           chmod 0755 ./DEBIAN/prerm || true
           dpkg-deb -Zgzip -b ${{ github.workspace }}/package/debian ${{ github.workspace }}/build/smartdns_with_ui.${{needs.get-version.outputs.CUR_VERSION}}.$GOARCH.deb
+      - name: Upload regular deb to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartdns-regular-deb-${{ matrix.goarch }}
+          path: ${{ github.workspace }}/build/smartdns_with_ui.*.deb
+          if-no-files-found: warn
       - name: release ipk with edns
         run: |
           cd ${{ github.workspace }}
@@ -214,8 +229,9 @@ jobs:
           cat >> docker-openssl.sh << EOF
           apk add perl make coreutils tar pkgconfig dpkg binutils
           cd /workdir
-          export CFLAGS="-I /workdir/openssl/include -DFEATURE_CHECK_EDNS"
-          export LDFLAGS="-L /workdir/openssl"
+          # 对齐普通包：启用 zlib（DoH/DoH3 gzip/deflate 解压），同时保留 EDNS 宏
+          export CFLAGS="-I /workdir/openssl/include -Wno-error=date-time -I/workdir/zlib -DWITH_ZLIB -DFEATURE_CHECK_EDNS"
+          export LDFLAGS="-L /workdir/openssl -L /workdir/zlib -lz"
           ./package/build-pkg.sh --platform linux --arch all --filearch $GOARCH-linux-edns --outputdir /workdir/build
           EOF
           if  test "$GOARCH" = "armv7" ;then
@@ -223,26 +239,19 @@ jobs:
           else
             docker run -i --rm -v ${{ github.workspace }}:/workdir muslcc/x86_64:$GOARCH-linux-musl sh /workdir/docker-openssl.sh
           fi
-          # =========新增开始：备份edns apk，防止后面make_openwrt_withui.sh覆盖删除=========
-          cd ${{ github.workspace }}/build
-          # 将生成的 *-edns.apk 备份，build‑pkg.sh输出的apk名字类似 smartdns.xxx.x86_64‑edns.apk
-          for apkfile in *-${GOARCH}-edns.apk; do
-            if [ -f "$apkfile" ]; then
-              cp "$apkfile" "${apkfile}.bak"
-            fi
-          done
-          # =========新增结束=========
           cd ${{ github.workspace }}/package/openwrt
           chmod +x make_openwrt_withui.sh
-          ./make_openwrt_withui.sh -o ${{ github.workspace }}/build --arch all --filearch $GOARCH-edns --ver ${{needs.get-version.outputs.CUR_VERSION}}
-          # =========新增开始：恢复备份的edns apk回build目录=========
-          cd ${{ github.workspace }}/build
-          for bakapk in *.apk.bak; do
-            if [ -f "$bakapk" ]; then
-              mv "$bakapk" "${bakapk%.bak}"
-            fi
-          done
-          # =========新增结束=========
+          # 打包放到 alpine:3 容器内执行：容器自带 apk 命令，才能同时生成带 UI 的 edns .ipk 和 .apk（宿主机 ubuntu 无 apk，会跳过 .apk）
+          docker run -i --rm -v ${{ github.workspace }}:/workdir alpine:3 sh -c "apk update && apk add tar && /workdir/package/openwrt/make_openwrt_withui.sh -o /workdir/build --arch all --filearch $GOARCH-edns --ver ${{needs.get-version.outputs.CUR_VERSION}}"
+      - name: Upload edns openwrt/alpine packages to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartdns-edns-openwrt-${{ matrix.goarch }}
+          path: |
+            ${{ github.workspace }}/build/smartdns_with_ui.*-edns.ipk
+            ${{ github.workspace }}/build/smartdns_with_ui.*-edns.apk
+            ${{ github.workspace }}/build/smartdns_with_ui.*-edns.tar.gz
+          if-no-files-found: warn
       - name: release deb with edns
         run: |
           cd ${{ github.workspace }}/package/debian
@@ -250,6 +259,12 @@ jobs:
           cp ${{ github.workspace }}/src/smartdns usr/sbin/
           chmod +x usr/sbin/smartdns || true
           dpkg-deb -Zgzip -b ${{ github.workspace }}/package/debian ${{ github.workspace }}/build/smartdns_with_ui.${{needs.get-version.outputs.CUR_VERSION}}.$GOARCH-edns.deb
+      - name: Upload edns deb to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartdns-edns-deb-${{ matrix.goarch }}
+          path: ${{ github.workspace }}/build/smartdns_with_ui.*-edns.deb
+          if-no-files-found: warn
       - name: general tag and release ipk
         id: tag
         run: |
