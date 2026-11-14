@@ -80,6 +80,10 @@ void _dns_server_conn_release(struct dns_server_conn_head *conn)
 			http2_stream_close(http2_stream->stream);
 			http2_stream->stream = NULL;
 		}
+		if (http2_stream->ctx != NULL) {
+			http2_ctx_put(http2_stream->ctx);
+			http2_stream->ctx = NULL;
+		}
 	}
 
 	if (conn->fd > 0) {
@@ -164,6 +168,11 @@ void _dns_server_client_touch(struct dns_server_conn_head *conn)
 
 int _dns_server_client_close(struct dns_server_conn_head *conn)
 {
+	/* Only the first closer tears the connection down; later calls must not drop another refcnt. */
+	if (atomic_inc_return(&conn->closed) != 1) {
+		return 0;
+	}
+
 	if (conn->fd > 0) {
 		_dns_server_epoll_ctl(conn, EPOLL_CTL_DEL, 0);
 	}
