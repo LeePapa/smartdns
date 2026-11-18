@@ -1006,6 +1006,18 @@ impl DB {
         }
 
         let conn = conn.as_mut().unwrap();
+
+        // Rebuild at most once an hour. timestamp_end is set when the table
+        // was last regenerated, so any row tells us whether it is still fresh.
+        let last_update: Option<u64> = conn
+            .query_row("SELECT timestamp_end FROM top_client_list LIMIT 1", [], |row| row.get(0))
+            .ok();
+        if let Some(last) = last_update {
+            if timestamp_now.saturating_sub(last) < 3600 * 1000 {
+                return Ok(());
+            }
+        }
+
         let sql = "SELECT client, count FROM top_client_list ORDER BY count DESC";
         self.debug_query_plan(&conn, sql.to_string(), &vec![]);
 
@@ -1026,29 +1038,37 @@ impl DB {
             rusqlite::params![timestamp, timestamp_now],
         )?;
 
-        let mut client_count_list = Vec::new();
-
-        let mut stmt = tx.prepare(sql)?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ClientQueryCount {
-                client_ip: row.get(0)?,
-                count: row.get(1)?,
-                timestamp_start: timestamp,
-                timestamp_end: timestamp_now,
-            })
-        })?;
-
-        for row in rows {
-            client_count_list.push(row?);
-        }
-
-        stmt.finalize()?;
+        // The SELECT below only filled client_count_list, which was never
+        // used or returned. Keep INSERT ... SELECT as the sole write.
+        // let mut client_count_list = Vec::new();
+        //
+        // let mut stmt = tx.prepare(sql)?;
+        // let rows = stmt.query_map([], |row| {
+        //     Ok(ClientQueryCount {
+        //         client_ip: row.get(0)?,
+        //         count: row.get(1)?,
+        //         timestamp_start: timestamp,
+        //         timestamp_end: timestamp_now,
+        //     })
+        // })?;
+        //
+        // for row in rows {
+        //     client_count_list.push(row?);
+        // }
+        //
+        // stmt.finalize()?;
         tx.commit()?;
 
         Ok(())
     }
 
     pub fn get_client_top_list(&self, count: u32) -> Result<Vec<ClientQueryCount>, Box<dyn Error>> {
+        // Rebuild on demand when the UI actually queries, instead of on every
+        // hourly cleanup when nobody reads it. Must run before opening the
+        // read-only connection because it takes the write-connection lock.
+        let timestamp = smartdns::get_utc_time_ms().saturating_sub(7 * 24 * 3600 * 1000);
+        self.refresh_client_top_list(timestamp)?;
+
         let mut ret = Vec::new();
         let conn = self.get_readonly_conn();
         if conn.as_ref().is_none() {
@@ -1227,6 +1247,18 @@ impl DB {
         }
 
         let conn = conn.as_mut().unwrap();
+
+        // Rebuild at most once an hour. timestamp_end is set when the table
+        // was last regenerated, so any row tells us whether it is still fresh.
+        let last_update: Option<u64> = conn
+            .query_row("SELECT timestamp_end FROM top_domain_list LIMIT 1", [], |row| row.get(0))
+            .ok();
+        if let Some(last) = last_update {
+            if timestamp_now.saturating_sub(last) < 3600 * 1000 {
+                return Ok(());
+            }
+        }
+
         let sql = "SELECT domain, count FROM top_domain_list ORDER BY count DESC";
         self.debug_query_plan(&conn, sql.to_string(), &vec![]);
 
@@ -1247,28 +1279,36 @@ impl DB {
             rusqlite::params![timestamp, timestamp_now],
         )?;
 
-        let mut domain_count_list = Vec::new();
-
-        let mut stmt = tx.prepare(sql)?;
-        let rows = stmt.query_map([], |row| {
-            Ok(DomainQueryCount {
-                domain: row.get(0)?,
-                count: row.get(1)?,
-                timestamp_start: timestamp,
-                timestamp_end: timestamp_now,
-            })
-        })?;
-
-        for row in rows {
-            domain_count_list.push(row?);
-        }
-        stmt.finalize()?;
+        // The SELECT below only filled domain_count_list, which was never
+        // used or returned. Keep INSERT ... SELECT as the sole write.
+        // let mut domain_count_list = Vec::new();
+        //
+        // let mut stmt = tx.prepare(sql)?;
+        // let rows = stmt.query_map([], |row| {
+        //     Ok(DomainQueryCount {
+        //         domain: row.get(0)?,
+        //         count: row.get(1)?,
+        //         timestamp_start: timestamp,
+        //         timestamp_end: timestamp_now,
+        //     })
+        // })?;
+        //
+        // for row in rows {
+        //     domain_count_list.push(row?);
+        // }
+        // stmt.finalize()?;
         tx.commit()?;
 
         Ok(())
     }
 
     pub fn get_domain_top_list(&self, count: u32) -> Result<Vec<DomainQueryCount>, Box<dyn Error>> {
+        // Rebuild on demand when the UI actually queries, instead of on every
+        // hourly cleanup when nobody reads it. Must run before opening the
+        // read-only connection because it takes the write-connection lock.
+        let timestamp = smartdns::get_utc_time_ms().saturating_sub(7 * 24 * 3600 * 1000);
+        self.refresh_domain_top_list(timestamp)?;
+
         let mut ret = Vec::new();
         let conn = self.get_readonly_conn();
         if conn.as_ref().is_none() {
