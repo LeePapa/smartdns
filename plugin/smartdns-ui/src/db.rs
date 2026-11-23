@@ -168,8 +168,10 @@ pub struct DomainListGetParam {
     pub domain: Option<String>,
     pub domain_filter_mode: Option<String>,
     pub domain_type: Option<u32>,
+    pub domain_type_filter_mode: Option<String>,
     pub client: Option<String>,
     pub domain_group: Option<String>,
+    pub domain_group_filter_mode: Option<String>,
     pub reply_code: Option<u16>,
     pub timestamp_before: Option<u64>,
     pub timestamp_after: Option<u64>,
@@ -188,8 +190,10 @@ impl DomainListGetParam {
             domain: None,
             domain_filter_mode: None,
             domain_type: None,
+            domain_type_filter_mode: None,
             client: None,
             domain_group: None,
+            domain_group_filter_mode: None,
             reply_code: None,
             timestamp_before: None,
             timestamp_after: None,
@@ -794,7 +798,13 @@ impl DB {
         }
 
         if let Some(v) = &param.domain_type {
-            sql_where.push("domain_type = ?".to_string());
+            let mode = param.domain_type_filter_mode.as_deref().unwrap_or("equals").to_lowercase();
+            let op = match mode.as_str() {
+                "notequals" => "<>",
+                "equals" => "=",
+                _ => return Err("domain_type_filter_mode param error".into()),
+            };
+            sql_where.push(format!("domain_type {} ?", op));
             sql_param.push(v.to_string());
             order_timestamp_first = false;
         }
@@ -806,8 +816,18 @@ impl DB {
         }
 
         if let Some(v) = &param.domain_group {
-            sql_where.push("domain_group = ?".to_string());
-            sql_param.push(v.clone());
+            let mode = param.domain_group_filter_mode.as_deref().unwrap_or("equals").to_lowercase();
+            let op = match mode.as_str() {
+                "notequals" => "<>",
+                "equals" => "=",
+                _ => return Err("domain_group_filter_mode param error".into()),
+            };
+            if v == "default" {
+                sql_where.push(format!("domain_group {} ''", op));
+            } else {
+                sql_where.push(format!("domain_group {} ?", op));
+                sql_param.push(v.clone());
+            }
             order_timestamp_first = false;
         }
 
@@ -1018,9 +1038,6 @@ impl DB {
             }
         }
 
-        let sql = "SELECT client, count FROM top_client_list ORDER BY count DESC";
-        self.debug_query_plan(&conn, sql.to_string(), &vec![]);
-
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM top_client_list", [])?;
         tx.execute(
@@ -1037,26 +1054,6 @@ impl DB {
              LIMIT 20",
             rusqlite::params![timestamp, timestamp_now],
         )?;
-
-        // The SELECT below only filled client_count_list, which was never
-        // used or returned. Keep INSERT ... SELECT as the sole write.
-        // let mut client_count_list = Vec::new();
-        //
-        // let mut stmt = tx.prepare(sql)?;
-        // let rows = stmt.query_map([], |row| {
-        //     Ok(ClientQueryCount {
-        //         client_ip: row.get(0)?,
-        //         count: row.get(1)?,
-        //         timestamp_start: timestamp,
-        //         timestamp_end: timestamp_now,
-        //     })
-        // })?;
-        //
-        // for row in rows {
-        //     client_count_list.push(row?);
-        // }
-        //
-        // stmt.finalize()?;
         tx.commit()?;
 
         Ok(())
@@ -1259,9 +1256,6 @@ impl DB {
             }
         }
 
-        let sql = "SELECT domain, count FROM top_domain_list ORDER BY count DESC";
-        self.debug_query_plan(&conn, sql.to_string(), &vec![]);
-
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM top_domain_list", [])?;
         tx.execute(
@@ -1278,25 +1272,6 @@ impl DB {
              LIMIT 20",
             rusqlite::params![timestamp, timestamp_now],
         )?;
-
-        // The SELECT below only filled domain_count_list, which was never
-        // used or returned. Keep INSERT ... SELECT as the sole write.
-        // let mut domain_count_list = Vec::new();
-        //
-        // let mut stmt = tx.prepare(sql)?;
-        // let rows = stmt.query_map([], |row| {
-        //     Ok(DomainQueryCount {
-        //         domain: row.get(0)?,
-        //         count: row.get(1)?,
-        //         timestamp_start: timestamp,
-        //         timestamp_end: timestamp_now,
-        //     })
-        // })?;
-        //
-        // for row in rows {
-        //     domain_count_list.push(row?);
-        // }
-        // stmt.finalize()?;
         tx.commit()?;
 
         Ok(())
