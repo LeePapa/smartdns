@@ -693,9 +693,9 @@ impl DB {
 
         for d in data {
             let ret = stmt.execute(rusqlite::params![
-                &d.timestamp.to_string(),
+                &(d.timestamp as i64),
                 &d.domain,
-                &d.domain_type.to_string(),
+                &(d.domain_type as i64),
                 &d.client,
                 &d.domain_group,
                 &d.reply_code,
@@ -1103,8 +1103,8 @@ impl DB {
             }
         }
 
-        let sql = "SELECT client, count FROM top_client_list ORDER BY count DESC";
-        self.debug_query_plan(&conn, sql.to_string(), &vec![]);
+        //let sql = "SELECT client, count FROM top_client_list ORDER BY count DESC";
+        //self.debug_query_plan(&conn, sql.to_string(), &vec![]);
 
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM top_client_list", [])?;
@@ -1346,8 +1346,8 @@ impl DB {
             }
         }
 
-        let sql = "SELECT domain, count FROM top_domain_list ORDER BY count DESC";
-        self.debug_query_plan(&conn, sql.to_string(), &vec![]);
+        //let sql = "SELECT domain, count FROM top_domain_list ORDER BY count DESC";
+        //self.debug_query_plan(&conn, sql.to_string(), &vec![]);
 
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM top_domain_list", [])?;
