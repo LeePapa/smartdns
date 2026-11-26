@@ -28,7 +28,7 @@ jobs:
     needs: get-version
     strategy:
       matrix:
-        goarch: [x86_64]
+        goarch: [x86_64, armv7]
         # bindgen 似乎不支持armv7和powerpc64le
       fail-fast: false
     runs-on: ubuntu-latest
