@@ -1,4 +1,4 @@
-name: Docker Image CI with ui
+name: Docker Image CI with ui edns
 on:
   workflow_dispatch:
   push:
@@ -275,7 +275,7 @@ jobs:
           echo ${{ github.sha }} >> release.txt
           echo "status=success" >> $GITHUB_OUTPUT
       - name: Upload firmware to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         if: steps.tag.outputs.status == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN }}
